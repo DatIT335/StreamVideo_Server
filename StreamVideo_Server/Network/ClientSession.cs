@@ -3,6 +3,8 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using StreamVideo_Server.DTO;
+using StreamVideo_Server.Database;
+
 
 namespace StreamVideo_Server.Network
 
@@ -71,30 +73,30 @@ namespace StreamVideo_Server.Network
         }
         private async void XuLyLogin(string payload)
         {
-            // Parse payload thành LoginRequestDTO
             LoginRequestDTO login =
                 JsonSerializer.Deserialize<LoginRequestDTO>(payload);
 
-            Console.WriteLine($"Login: {login.TenDangNhap}");
+            UserRepository repo = new UserRepository();
 
-            // TẠM THỜI hardcode (chưa SQL)
-            bool hopLe =
-                login.TenDangNhap == "admin" &&
-                login.MatKhau == "123";
+            bool hopLe = repo.KiemTraDangNhap(
+                login.TenDangNhap,
+                login.MatKhau
+            );
 
             LoginResponseDTO response = new LoginResponseDTO
             {
                 ThanhCong = hopLe,
-                ThongBao = hopLe ? "Đăng nhập thành công" : "Sai tài khoản hoặc mật khẩu"
+                ThongBao = hopLe
+                    ? "Đăng nhập thành công (SQL)"
+                    : "Sai tài khoản hoặc mật khẩu"
             };
 
-            // Serialize response → JSON
-            string jsonResponse = JsonSerializer.Serialize(response);
-            byte[] data = Encoding.UTF8.GetBytes(jsonResponse);
+            string json = JsonSerializer.Serialize(response);
+            byte[] data = Encoding.UTF8.GetBytes(json);
 
-            // Gửi lại cho client
             await _sslStream.WriteAsync(data);
         }
+
 
 
         private void XuLyStream(string payload)
