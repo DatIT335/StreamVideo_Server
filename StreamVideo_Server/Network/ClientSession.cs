@@ -1,119 +1,114 @@
-﻿using System.Net.Security;
+﻿using StreamVideo_Server.Common; // Nhớ using AES
+using StreamVideo_Server.Database;
+using StreamVideo_Server.DTO;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
-using StreamVideo_Server.DTO;
-using StreamVideo_Server.Database;
-
+using System.Net.Security;
 
 namespace StreamVideo_Server.Network
-
 {
-    /// <summary>
-    /// Đại diện cho 1 client đang kết nối
-    /// </summary>
     public class ClientSession
     {
-        private TcpClient _client;
+        public TcpClient Client { get; private set; } // Public để Server quản lý list
         private SslStream _sslStream;
+        private BinaryReader _reader;
+        private BinaryWriter _writer;
+
+        public bool IsLoggedIn { get; private set; } = false;
+        public string Username { get; private set; } = "";
 
         public ClientSession(TcpClient client, SslStream sslStream)
         {
-            _client = client;
+            Client = client;
             _sslStream = sslStream;
+            _reader = new BinaryReader(_sslStream); // Dùng BinaryReader để đọc chính xác byte
+            _writer = new BinaryWriter(_sslStream);
         }
 
-        /// <summary>
-        /// Hàm xử lý client
-        /// </summary>
         public async Task XuLyAsync()
         {
             try
             {
-                byte[] buffer = new byte[4096];
-
-                while (_client.Connected)
+                while (Client.Connected)
                 {
-                    int soByte = await _sslStream.ReadAsync(buffer, 0, buffer.Length);
-                    if (soByte == 0)
-                        break;
+                    // 1. Đọc độ dài gói tin (4 byte int)
+                    // Cần try-catch vì ReadInt32 sẽ throw nếu ngắt kết nối
+                    int length = _reader.ReadInt32();
 
-                    string json = Encoding.UTF8.GetString(buffer, 0, soByte);
+                    // 2. Đọc loại gói tin (1 byte)
+                    byte type = _reader.ReadByte();
 
-                    // Parse JSON thành BaseRequestDTO
-                    BaseRequestDTO request =
-                        JsonSerializer.Deserialize<BaseRequestDTO>(json);
+                    // 3. Đọc dữ liệu payload
+                    byte[] payload = _reader.ReadBytes(length);
 
-                    // Phân loại request
-                    switch (request.Type)
+                    if (type == 1) // Loại 1: JSON Request (Login...)
                     {
-                        case RequestType.LOGIN:
-                            XuLyLogin(request.Payload);
-                            break;
-
-                        case RequestType.STREAM:
-                            XuLyStream(request.Payload);
-                            break;
-
-                        case RequestType.LOGOUT:
-                            XuLyLogout();
-                            return;
+                        string json = Encoding.UTF8.GetString(payload);
+                        ProcessJsonRequest(json);
                     }
+                    // Nếu là loại 2 (Binary) thì server hiện tại chưa cần xử lý chiều lên từ client (trừ khi client stream ngược lại)
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("Lỗi ClientSession: " + ex.Message);
+                Console.WriteLine("Client ngắt kết nối.");
             }
             finally
             {
                 _sslStream.Close();
-                _client.Close();
+                Client.Close();
             }
         }
-        private async void XuLyLogin(string payload)
-        {
-            LoginRequestDTO login =
-                JsonSerializer.Deserialize<LoginRequestDTO>(payload);
 
+        private void ProcessJsonRequest(string json)
+        {
+            var request = JsonSerializer.Deserialize<BaseRequestDTO>(json);
+            if (request.Type == RequestType.LOGIN)
+            {
+                XuLyLogin(request.Payload);
+            }
+        }
+
+        private void XuLyLogin(string payload)
+        {
+            var login = JsonSerializer.Deserialize<LoginRequestDTO>(payload);
             UserRepository repo = new UserRepository();
 
-            bool hopLe = repo.KiemTraDangNhap(
-                login.TenDangNhap,
-                login.MatKhau
-            );
+            // Kiểm tra DB
+            bool hopLe = repo.KiemTraDangNhap(login.TenDangNhap, login.MatKhau);
 
-            LoginResponseDTO response = new LoginResponseDTO
+            if (hopLe)
+            {
+                IsLoggedIn = true;
+                Username = login.TenDangNhap;
+            }
+
+            var response = new LoginResponseDTO
             {
                 ThanhCong = hopLe,
-                ThongBao = hopLe
-                    ? "Đăng nhập thành công (SQL)"
-                    : "Sai tài khoản hoặc mật khẩu"
+                ThongBao = hopLe ? "Đăng nhập thành công" : "Sai thông tin"
             };
 
-            string json = JsonSerializer.Serialize(response);
-            byte[] data = Encoding.UTF8.GetBytes(json);
-
-            await _sslStream.WriteAsync(data);
+            // Gửi phản hồi về Client (Gói tin loại 1 - JSON)
+            string jsonRes = JsonSerializer.Serialize(response);
+            GuiDuLieu(1, Encoding.UTF8.GetBytes(jsonRes));
         }
 
-
-
-        private void XuLyStream(string payload)
+        // Hàm gửi dữ liệu chung (Thread-safe đơn giản)
+        public void GuiDuLieu(byte type, byte[] data)
         {
-            Console.WriteLine("Client gửi yêu cầu STREAM");
-            Console.WriteLine("Payload: " + payload);
-
-            // TODO:
-            // - Kiểm tra đã login chưa
-            // - Bắt đầu gửi dữ liệu stream
+            try
+            {
+                lock (_writer) // Tránh tranh chấp tài nguyên khi gửi từ nhiều luồng
+                {
+                    _writer.Write((int)data.Length); // 4 byte độ dài
+                    _writer.Write(type);             // 1 byte loại
+                    _writer.Write(data);             // Payload
+                    _writer.Flush();
+                }
+            }
+            catch { /* Client có thể đã out */ }
         }
-
-        private void XuLyLogout()
-        {
-            Console.WriteLine("Client LOGOUT");
-        }
-
     }
 }
-

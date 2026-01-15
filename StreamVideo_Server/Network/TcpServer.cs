@@ -1,4 +1,6 @@
-﻿using System.Net;
+﻿using StreamVideo_Server.Common;
+using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -16,6 +18,8 @@ namespace StreamVideo_Server.Network
         private TcpListener _listener;
         private X509Certificate2 _serverCert;
         private bool _dangChay = false;
+        // Thêm danh sách client (Thread-safe list)
+        private ConcurrentBag<ClientSession> _clients = new ConcurrentBag<ClientSession>();
 
         /// <summary>
         /// Event dùng để gửi log lên UI (FormMain)
@@ -61,8 +65,27 @@ namespace StreamVideo_Server.Network
 
                 // Tạo session cho client
                 ClientSession session = new ClientSession(client, sslStream);
-
+                _clients.Add(session);
                 _ = Task.Run(() => session.XuLyAsync());
+            }
+        }
+
+        /// <summary>
+        /// Hàm Stream Video: Gửi 1 khung hình (ảnh) tới tất cả client đã đăng nhập
+        /// </summary>
+        public void BroadcastVideoFrame(byte[] imageBytes)
+        {
+            // 1. Mã hóa AES dữ liệu ảnh trước khi gửi
+            byte[] encryptedData = AesHelper.Encrypt(imageBytes);
+
+            // 2. Gửi cho tất cả client
+            foreach (var session in _clients)
+            {
+                if (session.IsLoggedIn && session.Client.Connected)
+                {
+                    // Gửi gói tin loại 2 (Binary Video)
+                    session.GuiDuLieu(2, encryptedData);
+                }
             }
         }
 

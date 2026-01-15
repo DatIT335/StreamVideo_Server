@@ -1,6 +1,7 @@
 ﻿using StreamVideo_Server.Network;
 using System;
 using System.Windows.Forms;
+using System.Drawing.Imaging;
 
 namespace StreamVideo_Server.Winforms
 {
@@ -52,8 +53,23 @@ namespace StreamVideo_Server.Winforms
             {
                 MessageBox.Show("Lỗi start server: " + ex.Message);
             }
+            // Bắt đầu timer stream (Giả sử bắt đầu stream ngay khi mở server, hoặc bạn làm nút riêng)
+            timerStream.Start();
         }
-
+        // Sự kiện Tick của Timer
+        
+        private Bitmap CaptureScreen()
+        {
+            // Chụp toàn màn hình chính
+            Rectangle bounds = Screen.PrimaryScreen.Bounds;
+            Bitmap bmp = new Bitmap(bounds.Width, bounds.Height);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(Point.Empty, Point.Empty, bounds.Size);
+            }
+            // Resize nhỏ lại chút cho nhẹ mạng LAN (Option)
+            return new Bitmap(bmp, new Size(800, 450));
+        }
         /// <summary>
         /// Bấm Stop Server
         /// </summary>
@@ -68,6 +84,25 @@ namespace StreamVideo_Server.Winforms
             btnStop.Enabled = false;
 
             GhiLog("Server đã dừng");
+        }
+
+        private void timerStream_Tick_1(object sender, EventArgs e)
+        {
+            if (_server == null) return;
+
+            // 1. Chụp màn hình (hoặc lấy từ Camera)
+            Bitmap bmp = CaptureScreen();
+
+            // 2. Chuyển sang byte array (JPEG)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                bmp.Save(ms, ImageFormat.Jpeg);
+                byte[] imgData = ms.ToArray();
+
+                // 3. Gọi Server gửi đi
+                _server.BroadcastVideoFrame(imgData);
+            }
+            bmp.Dispose();
         }
     }
 }
