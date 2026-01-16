@@ -6,7 +6,7 @@ using System.IO;
 using System.Windows.Forms;
 using AForge.Video;
 using AForge.Video.DirectShow;
-using NAudio.Wave; // Thư viện âm thanh
+using NAudio.Wave;
 
 namespace StreamVideo_Server.Winforms
 {
@@ -15,8 +15,6 @@ namespace StreamVideo_Server.Winforms
         private TcpServer _server;
         private FilterInfoCollection _filterInfoCollection;
         private VideoCaptureDevice _videoCaptureDevice;
-
-        // Biến xử lý âm thanh
         private WaveInEvent _waveIn;
 
         public FormMain()
@@ -24,41 +22,41 @@ namespace StreamVideo_Server.Winforms
             InitializeComponent();
         }
 
-        private void FormMain_Load(object sender, EventArgs e)
-        {
-            try
-            {
-                _filterInfoCollection = new FilterInfoCollection(FilterCategory.VideoInputDevice);
-                if (_filterInfoCollection.Count > 0)
-                    GhiLog($"Tìm thấy Webcam: {_filterInfoCollection[0].Name}");
-                else
-                    GhiLog("Không tìm thấy Webcam!");
-            }
-            catch { }
-        }
+        // Bỏ qua Form_Load
+        private void FormMain_Load(object sender, EventArgs e) { }
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
             try
             {
-                _server = new TcpServer(9000);
-                _server.OnLog += GhiLog;
+                // --- 1. TÌM KIẾM WEBCAM ---
+                _filterInfoCollection = new FilterInfoCollection(FilterCategory.VideoInputDevice);
 
-                // 1. BẬT WEBCAM
-                if (_filterInfoCollection != null && _filterInfoCollection.Count > 0)
+                if (_filterInfoCollection.Count == 0)
                 {
+                    MessageBox.Show("Không tìm thấy Webcam nào trên máy tính này!\nHãy kiểm tra lại Driver.", "Lỗi Camera");
+                }
+                else
+                {
+                    GhiLog($"Tìm thấy Webcam: {_filterInfoCollection[0].Name}");
+
+                    // Khởi động Webcam
                     _videoCaptureDevice = new VideoCaptureDevice(_filterInfoCollection[0].MonikerString);
                     _videoCaptureDevice.NewFrame += Video_NewFrame;
                     _videoCaptureDevice.Start();
                     GhiLog("Đã bật Webcam.");
                 }
 
-                // 2. BẬT MICRO (AUDIO)
+                // --- 2. KHỞI ĐỘNG SERVER ---
+                _server = new TcpServer(9000);
+                _server.OnLog += GhiLog;
+
+                // --- 3. BẬT MICRO (AUDIO) ---
                 if (WaveIn.DeviceCount > 0)
                 {
                     _waveIn = new WaveInEvent();
                     _waveIn.DeviceNumber = 0;
-                    _waveIn.WaveFormat = new WaveFormat(44100, 1); // 44.1kHz, Mono
+                    _waveIn.WaveFormat = new WaveFormat(44100, 1);
                     _waveIn.DataAvailable += Audio_DataAvailable;
                     _waveIn.StartRecording();
                     GhiLog("Đã bật Microphone.");
@@ -77,22 +75,42 @@ namespace StreamVideo_Server.Winforms
             }
         }
 
-        // Xử lý HÌNH ẢNH (Gửi loại 2)
+        // Xử lý HÌNH ẢNH (Đã tắt Preview để có thể xóa PictureBox)
         private void Video_NewFrame(object sender, NewFrameEventArgs eventArgs)
         {
             if (_server == null) return;
             try
             {
-                using (Bitmap bmp = (Bitmap)eventArgs.Frame.Clone())
+                using (Bitmap originalFrame = (Bitmap)eventArgs.Frame.Clone())
                 {
-                    // Resize 640x480
-                    using (Bitmap resized = new Bitmap(bmp, new Size(640, 480)))
+                    // A. HIỂN THỊ LÊN SERVER (PREVIEW)
+                   
+                    /*try
+                    {
+                        pbPreview.Invoke(new Action(() =>
+                        {
+                            if (pbPreview.Image != null) pbPreview.Image.Dispose();
+                            pbPreview.Image = (Bitmap)originalFrame.Clone();
+                        }));
+                    }
+                    catch { }*/
+                    
+
+                    // B. GỬI CHO CLIENT
+                    // Resize về 640x480 để giảm dung lượng mạng
+                    using (Bitmap resized = new Bitmap(originalFrame, new Size(640, 480)))
                     {
                         using (MemoryStream ms = new MemoryStream())
                         {
                             resized.Save(ms, ImageFormat.Jpeg);
                             byte[] imgData = ms.ToArray();
-                            _server.BroadcastVideoFrame(imgData);
+
+                            // --- BẮT ĐẦU MÃ HÓA ---
+                            byte[] encryptedData = SecurityHelper.Encrypt(imgData);
+                            // ----------------------
+
+                            // Gửi dữ liệu đã mã hóa đi
+                            _server.BroadcastVideoFrame(encryptedData);
                         }
                     }
                 }
@@ -100,7 +118,7 @@ namespace StreamVideo_Server.Winforms
             catch { }
         }
 
-        // Xử lý ÂM THANH (Gửi loại 3)
+        // Xử lý ÂM THANH
         private void Audio_DataAvailable(object sender, WaveInEventArgs e)
         {
             if (_server == null) return;

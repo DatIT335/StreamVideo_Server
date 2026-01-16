@@ -27,6 +27,8 @@
             lblStatus = new Label();
             lstLog = new ListBox();
             timerStream = new System.Windows.Forms.Timer(components);
+            pbPreview = new PictureBox();
+            ((System.ComponentModel.ISupportInitialize)pbPreview).BeginInit();
             SuspendLayout();
             // 
             // lblTitle
@@ -81,13 +83,20 @@
             lstLog.Size = new Size(594, 244);
             lstLog.TabIndex = 0;
             // 
-            
+            // pbPreview
+            // 
+            pbPreview.Location = new Point(413, 20);
+            pbPreview.Name = "pbPreview";
+            pbPreview.Size = new Size(210, 115);
+            pbPreview.TabIndex = 5;
+            pbPreview.TabStop = false;
             // 
             // FormMain
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(663, 453);
+            Controls.Add(pbPreview);
             Controls.Add(lstLog);
             Controls.Add(lblStatus);
             Controls.Add(btnStop);
@@ -96,10 +105,12 @@
             Margin = new Padding(3, 4, 3, 4);
             Name = "FormMain";
             Text = "Server Stream";
+            ((System.ComponentModel.ISupportInitialize)pbPreview).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
 
         private System.Windows.Forms.Timer timerStream;
+        private PictureBox pbPreview;
     }
 }
