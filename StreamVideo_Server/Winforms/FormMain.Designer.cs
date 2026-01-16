@@ -81,9 +81,7 @@
             lstLog.Size = new Size(594, 244);
             lstLog.TabIndex = 0;
             // 
-            // timerStream
-            // 
-            timerStream.Tick += timerStream_Tick_1;
+            
             // 
             // FormMain
             // 

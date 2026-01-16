@@ -1,37 +1,42 @@
 ﻿using StreamVideo_Server.Network;
 using System;
-using System.Windows.Forms;
+using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
+using System.Windows.Forms;
+using AForge.Video;
+using AForge.Video.DirectShow;
+using NAudio.Wave; // Thư viện âm thanh
 
 namespace StreamVideo_Server.Winforms
 {
     public partial class FormMain : Form
     {
         private TcpServer _server;
+        private FilterInfoCollection _filterInfoCollection;
+        private VideoCaptureDevice _videoCaptureDevice;
+
+        // Biến xử lý âm thanh
+        private WaveInEvent _waveIn;
 
         public FormMain()
         {
             InitializeComponent();
         }
 
-        /// <summary>
-        /// Ghi log an toàn từ thread khác
-        /// </summary>
-        private void GhiLog(string noiDung)
+        private void FormMain_Load(object sender, EventArgs e)
         {
-            if (InvokeRequired)
+            try
             {
-                Invoke(new Action<string>(GhiLog), noiDung);
-                return;
+                _filterInfoCollection = new FilterInfoCollection(FilterCategory.VideoInputDevice);
+                if (_filterInfoCollection.Count > 0)
+                    GhiLog($"Tìm thấy Webcam: {_filterInfoCollection[0].Name}");
+                else
+                    GhiLog("Không tìm thấy Webcam!");
             }
-
-            lstLog.Items.Add($"[{DateTime.Now:HH:mm:ss}] {noiDung}");
-            lstLog.TopIndex = lstLog.Items.Count - 1;
+            catch { }
         }
 
-        /// <summary>
-        /// Bấm Start Server
-        /// </summary>
         private async void btnStart_Click(object sender, EventArgs e)
         {
             try
@@ -39,70 +44,99 @@ namespace StreamVideo_Server.Winforms
                 _server = new TcpServer(9000);
                 _server.OnLog += GhiLog;
 
-                await _server.BatDauAsync();
+                // 1. BẬT WEBCAM
+                if (_filterInfoCollection != null && _filterInfoCollection.Count > 0)
+                {
+                    _videoCaptureDevice = new VideoCaptureDevice(_filterInfoCollection[0].MonikerString);
+                    _videoCaptureDevice.NewFrame += Video_NewFrame;
+                    _videoCaptureDevice.Start();
+                    GhiLog("Đã bật Webcam.");
+                }
 
-                lblStatus.Text = "Trạng thái: ĐANG CHẠY";
-                lblStatus.ForeColor = System.Drawing.Color.Green;
+                // 2. BẬT MICRO (AUDIO)
+                if (WaveIn.DeviceCount > 0)
+                {
+                    _waveIn = new WaveInEvent();
+                    _waveIn.DeviceNumber = 0;
+                    _waveIn.WaveFormat = new WaveFormat(44100, 1); // 44.1kHz, Mono
+                    _waveIn.DataAvailable += Audio_DataAvailable;
+                    _waveIn.StartRecording();
+                    GhiLog("Đã bật Microphone.");
+                }
 
+                lblStatus.Text = "Trạng thái: ĐANG PHÁT (Webcam + Mic)";
+                lblStatus.ForeColor = Color.Green;
                 btnStart.Enabled = false;
                 btnStop.Enabled = true;
 
-                GhiLog("Server bắt đầu lắng nghe port 9000");
+                await _server.BatDauAsync();
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Lỗi start server: " + ex.Message);
+                MessageBox.Show("Lỗi: " + ex.Message);
             }
-            // Bắt đầu timer stream (Giả sử bắt đầu stream ngay khi mở server, hoặc bạn làm nút riêng)
-            timerStream.Start();
-        }
-        // Sự kiện Tick của Timer
-        
-        private Bitmap CaptureScreen()
-        {
-            // Chụp toàn màn hình chính
-            Rectangle bounds = Screen.PrimaryScreen.Bounds;
-            Bitmap bmp = new Bitmap(bounds.Width, bounds.Height);
-            using (Graphics g = Graphics.FromImage(bmp))
-            {
-                g.CopyFromScreen(Point.Empty, Point.Empty, bounds.Size);
-            }
-            // Resize nhỏ lại chút cho nhẹ mạng LAN (Option)
-            return new Bitmap(bmp, new Size(800, 450));
-        }
-        /// <summary>
-        /// Bấm Stop Server
-        /// </summary>
-        private void btnStop_Click(object sender, EventArgs e)
-        {
-            _server?.Dung();
-
-            lblStatus.Text = "Trạng thái: ĐÃ DỪNG";
-            lblStatus.ForeColor = System.Drawing.Color.Red;
-
-            btnStart.Enabled = true;
-            btnStop.Enabled = false;
-
-            GhiLog("Server đã dừng");
         }
 
-        private void timerStream_Tick_1(object sender, EventArgs e)
+        // Xử lý HÌNH ẢNH (Gửi loại 2)
+        private void Video_NewFrame(object sender, NewFrameEventArgs eventArgs)
         {
             if (_server == null) return;
-
-            // 1. Chụp màn hình (hoặc lấy từ Camera)
-            Bitmap bmp = CaptureScreen();
-
-            // 2. Chuyển sang byte array (JPEG)
-            using (MemoryStream ms = new MemoryStream())
+            try
             {
-                bmp.Save(ms, ImageFormat.Jpeg);
-                byte[] imgData = ms.ToArray();
-
-                // 3. Gọi Server gửi đi
-                _server.BroadcastVideoFrame(imgData);
+                using (Bitmap bmp = (Bitmap)eventArgs.Frame.Clone())
+                {
+                    // Resize 640x480
+                    using (Bitmap resized = new Bitmap(bmp, new Size(640, 480)))
+                    {
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            resized.Save(ms, ImageFormat.Jpeg);
+                            byte[] imgData = ms.ToArray();
+                            _server.BroadcastVideoFrame(imgData);
+                        }
+                    }
+                }
             }
-            bmp.Dispose();
+            catch { }
+        }
+
+        // Xử lý ÂM THANH (Gửi loại 3)
+        private void Audio_DataAvailable(object sender, WaveInEventArgs e)
+        {
+            if (_server == null) return;
+            byte[] audioData = new byte[e.BytesRecorded];
+            Array.Copy(e.Buffer, audioData, e.BytesRecorded);
+            _server.BroadcastAudio(audioData);
+        }
+
+        private void btnStop_Click(object sender, EventArgs e)
+        {
+            // Tắt Mic
+            if (_waveIn != null)
+            {
+                _waveIn.StopRecording();
+                _waveIn.Dispose();
+                _waveIn = null;
+            }
+
+            // Tắt Cam
+            if (_videoCaptureDevice != null && _videoCaptureDevice.IsRunning)
+            {
+                _videoCaptureDevice.SignalToStop();
+                _videoCaptureDevice = null;
+            }
+
+            _server?.Dung();
+            lblStatus.Text = "Trạng thái: ĐÃ DỪNG";
+            lblStatus.ForeColor = Color.Red;
+            btnStart.Enabled = true;
+            btnStop.Enabled = false;
+        }
+
+        private void GhiLog(string msg)
+        {
+            if (InvokeRequired) { Invoke(new Action<string>(GhiLog), msg); return; }
+            lstLog.Items.Add(msg);
         }
     }
 }

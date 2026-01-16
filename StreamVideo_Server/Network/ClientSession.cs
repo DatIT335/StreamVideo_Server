@@ -1,4 +1,4 @@
-﻿using StreamVideo_Server.Common; // Nhớ using AES
+﻿using StreamVideo_Server.Common;
 using StreamVideo_Server.Database;
 using StreamVideo_Server.DTO;
 using System.Net.Sockets;
@@ -10,7 +10,8 @@ namespace StreamVideo_Server.Network
 {
     public class ClientSession
     {
-        public TcpClient Client { get; private set; } // Public để Server quản lý list
+        // Đã sửa: Dùng Property 'Client' viết hoa (Public)
+        public TcpClient Client { get; private set; }
         private SslStream _sslStream;
         private BinaryReader _reader;
         private BinaryWriter _writer;
@@ -20,9 +21,9 @@ namespace StreamVideo_Server.Network
 
         public ClientSession(TcpClient client, SslStream sslStream)
         {
-            Client = client;
+            Client = client; // Gán vào Property Client
             _sslStream = sslStream;
-            _reader = new BinaryReader(_sslStream); // Dùng BinaryReader để đọc chính xác byte
+            _reader = new BinaryReader(_sslStream);
             _writer = new BinaryWriter(_sslStream);
         }
 
@@ -32,27 +33,24 @@ namespace StreamVideo_Server.Network
             {
                 while (Client.Connected)
                 {
-                    // 1. Đọc độ dài gói tin (4 byte int)
-                    // Cần try-catch vì ReadInt32 sẽ throw nếu ngắt kết nối
+                    // 1. Đọc header
                     int length = _reader.ReadInt32();
-
-                    // 2. Đọc loại gói tin (1 byte)
                     byte type = _reader.ReadByte();
 
-                    // 3. Đọc dữ liệu payload
+                    // 2. Đọc payload
                     byte[] payload = _reader.ReadBytes(length);
 
-                    if (type == 1) // Loại 1: JSON Request (Login...)
+                    if (type == 1) // JSON Request
                     {
                         string json = Encoding.UTF8.GetString(payload);
                         ProcessJsonRequest(json);
                     }
-                    // Nếu là loại 2 (Binary) thì server hiện tại chưa cần xử lý chiều lên từ client (trừ khi client stream ngược lại)
                 }
             }
-            catch (Exception)
+            catch
             {
-                Console.WriteLine("Client ngắt kết nối.");
+                // Khi ngắt kết nối đột ngột
+                XuLyLogout();
             }
             finally
             {
@@ -64,9 +62,15 @@ namespace StreamVideo_Server.Network
         private void ProcessJsonRequest(string json)
         {
             var request = JsonSerializer.Deserialize<BaseRequestDTO>(json);
+
+            // Phân loại Request
             if (request.Type == RequestType.LOGIN)
             {
                 XuLyLogin(request.Payload);
+            }
+            else if (request.Type == RequestType.LOGOUT) // <--- Thêm xử lý Logout
+            {
+                XuLyLogout();
             }
         }
 
@@ -75,13 +79,17 @@ namespace StreamVideo_Server.Network
             var login = JsonSerializer.Deserialize<LoginRequestDTO>(payload);
             UserRepository repo = new UserRepository();
 
-            // Kiểm tra DB
             bool hopLe = repo.KiemTraDangNhap(login.TenDangNhap, login.MatKhau);
 
             if (hopLe)
             {
                 IsLoggedIn = true;
                 Username = login.TenDangNhap;
+
+                // --- SỬA LỖI Ở ĐÂY ---
+                // Dùng 'Client' viết hoa thay vì '_client'
+                string ipClient = Client.Client.RemoteEndPoint?.ToString();
+                repo.GhiLichSu(Username, "Đăng nhập", ipClient);
             }
 
             var response = new LoginResponseDTO
@@ -90,25 +98,41 @@ namespace StreamVideo_Server.Network
                 ThongBao = hopLe ? "Đăng nhập thành công" : "Sai thông tin"
             };
 
-            // Gửi phản hồi về Client (Gói tin loại 1 - JSON)
             string jsonRes = JsonSerializer.Serialize(response);
             GuiDuLieu(1, Encoding.UTF8.GetBytes(jsonRes));
         }
 
-        // Hàm gửi dữ liệu chung (Thread-safe đơn giản)
+        // --- BỔ SUNG HÀM LOGOUT ---
+        private void XuLyLogout()
+        {
+            if (IsLoggedIn)
+            {
+                UserRepository repo = new UserRepository();
+                // Dùng Client viết hoa
+                string ipClient = Client.Client.RemoteEndPoint?.ToString();
+
+                // Ghi log vào DB
+                repo.GhiLichSu(Username, "Đăng xuất", ipClient);
+
+                IsLoggedIn = false;
+                Username = "";
+                Console.WriteLine($"User {Username} đã đăng xuất.");
+            }
+        }
+
         public void GuiDuLieu(byte type, byte[] data)
         {
             try
             {
-                lock (_writer) // Tránh tranh chấp tài nguyên khi gửi từ nhiều luồng
+                lock (_writer)
                 {
-                    _writer.Write((int)data.Length); // 4 byte độ dài
-                    _writer.Write(type);             // 1 byte loại
-                    _writer.Write(data);             // Payload
+                    _writer.Write((int)data.Length);
+                    _writer.Write(type);
+                    _writer.Write(data);
                     _writer.Flush();
                 }
             }
-            catch { /* Client có thể đã out */ }
+            catch { }
         }
     }
 }
